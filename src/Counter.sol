@@ -4,6 +4,7 @@ import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
 contract Counter {
     uint256 public number;
+    uint public constant decimals = 18;
 
     function setNumber(uint256 newNumber) public {
         number = newNumber;
