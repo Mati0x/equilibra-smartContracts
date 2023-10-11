@@ -101,7 +101,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
         FormulaParams calldata _params
     ) public initializer {
         __Ownable_init();
-        __Formula_init(_params);
+        _Formula_init(_params);
 
         require(
             (fundingToken = _fundingToken) != address(0),
