@@ -2,9 +2,11 @@
 pragma solidity ^0.8.17;
 
 import {OwnableUpgradeable} from "@oz-upgradeable/access/OwnableUpgradeable.sol";
-import {Initializable} from "@oz-upgradeable/proxy/utils/Initializable.sol";
+import {ReentrancyGuardUpgradeable} from "@oz-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
 
-//import {IMimeToken} from "mime-token/interfaces/IMimeToken.sol";
+
+
+import {IERC20} from '@oz/token/ERC20/IERC20.sol';
 import {ISuperToken} from "./interfaces/ISuperToken.sol";
 
 import {ICFAv1Forwarder} from "./interfaces/ICFAv1Forwarder.sol";
@@ -13,7 +15,7 @@ import {Formula, FormulaParams} from "./Formula.sol";
 import {Manager} from "./Manager.sol";
 
 error InvalidProjectList();
-error InvalidMimeToken();
+error InvalidgovToken();
 error SupportUnderflow();
 error ProjectAlreadyActive(uint256 _projectId);
 error ProjectNeedsMoreStake(
@@ -45,7 +47,7 @@ struct PoolProject {
     mapping(uint256 => mapping(address => uint256)) participantSupportAt;
 }
 
-contract Pool is Initializable, OwnableUpgradeable, Formula {
+contract Pool is OwnableUpgradeable,ReentrancyGuardUpgradeable, Formula {
     address public immutable cfaForwarder;
     address public immutable controller;
 
@@ -53,7 +55,10 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
     address public projectList;
     address public fundingToken;
-    address public mimeToken;
+    IERC20 public govToken;
+
+    uint round;
+
 
     // projectId => PoolProject
     mapping(uint256 => PoolProject) public poolProjects;
@@ -96,13 +101,13 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
     function initialize(
         address _fundingToken,
-        address _mimeToken,
+        address _govToken,
         address _projectList,
         FormulaParams calldata _params
     ) public initializer {
         __Ownable_init();
+        __ReentrancyGuard_init();
         _Formula_init(_params);
-
         require(
             (fundingToken = _fundingToken) != address(0),
             "Zero Funding Token"
@@ -114,25 +119,59 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
             revert InvalidProjectList();
         }
 
-        if (Manager(controller).isToken(_mimeToken)) {
-            mimeToken = _mimeToken;
+        if (Manager(controller).isToken(_govToken)) {
+            govToken = IERC20(_govToken);
         } else {
-            revert InvalidMimeToken();
+            revert InvalidgovToken();
         }
     }
 
     /* *************************************************************************************************************************************/
     /* ** Participant Support Function                                                                                                   ***/
     /* *************************************************************************************************************************************/
+    
+    /**
+     * 
+     * @custom:problema cualquiera activa Suportear projectos!
+     * @custom:discusion Eso deberia ser con el Owner, aca entra la GNOSIS_SAFE
+     * @custom:discusion Para esto es el MIME_TOKEN, para suportear proyectos, quiza se tenga que aplocar pero directo en la POOL
+     * Emitiendo X cantidad de shares que este asociada a la cantidad de tokens de governanza, y que haya un limite , pero que limita que haya gente que vote 2 veces?
+     * Y como garantizamos el conviction voting? Salvo que sea la POOL y la multisig quien aloque los tokens de voto a los usuarios o que haya un airdrop por cada 
+     */
+    mapping (address => uint) cantStaked;
+
+    function stakeGov(uint _amount) external nonReentrant {
+        uint allowance=govToken.allowance(msg.sender,address(this));
+        if (allowance<_amount) revert NOT_ENOUGH_ALLOENCE(allowance,_amount);
+        govToken.transferFrom(msg.sender,address(this),_amount);
+        ///@custom:assambly es menos costroso en terminos de gas
+        cantStaked[msg.sender]+=_amount;
+    }
+    /**
+     * 
+     */
+
+    function unstakeGov(uint _amount) external nonReentrant {
+        uint staked=cantStaked[msg.sender];
+        if (staked<_amount) revert NOT_ENOUGH_ALLOENCE(staked,_amount);
+        govToken.transferFrom(msg.sender,address(this),_amount);
+        ///@custom:assambly es menos costroso en terminos de gas
+        cantStaked[msg.sender]+=_amount;
+    }
+
+
+    error NOT_ENOUGH_ALLOENCE(uint _totAllowence,uint _amReq);
+    error NOT_ENOUGH_STAKED();
 
     function supportProjects(
         ProjectSupport[] calldata _projectSupports
-    ) public {
+    ) public nonReentrant {
+
         uint256 currentRound = getCurrentRound();
-        uint256 participantBalance = IMimeToken(mimeToken).balanceOf(
-            msg.sender
-        );
-        require(participantBalance > 0, "NO_BALANCE_AVAILABLE");
+
+        uint256 participantBalance = cantStaked[msg.sender];
+
+        if(participantBalance == 0) revert NOT_ENOUGH_STAKED();
 
         int256 deltaSupportSum = 0;
         for (uint256 i = 0; i < _projectSupports.length; i++) {
@@ -146,6 +185,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
             deltaSupportSum += _projectSupports[i].deltaSupport;
         }
+        if(participantBalance<deltaSupportSum) revert NOT_ENOUGH_STAKED();
 
         uint256 newTotalParticipantSupport = _applyDelta(
             getTotalParticipantSupport(msg.sender),
@@ -191,22 +231,24 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
         }
     }
 
-    function claimAndSupportProjects(
-        uint256 index,
-        address account,
-        uint256 amount,
-        bytes32[] calldata merkleProof,
-        ProjectSupport[] calldata _projectSupports
-    ) external {
-        IMimeToken(mimeToken).claim(index, account, amount, merkleProof);
-        supportProjects(_projectSupports);
-    }
+    // function claimAndSupportProjects(
+    //     uint256 index,
+    //     address account,
+    //     uint256 amount,
+    //     bytes32[] calldata merkleProof,
+    //     ProjectSupport[] calldata _projectSupports
+    // ) external {
+    //     IgovToken(govToken).claim(index, account, amount, merkleProof);
+    //     supportProjects(_projectSupports);
+    // }
 
     /* *************************************************************************************************************************************/
     /* ** Project Activation Function                                                                                                    ***/
     /* *************************************************************************************************************************************/
+    ///@custom:problema cualquiera activa projectos!
+    ///@custom:discusion Eso deberia ser con el Owner, aca entra la GNOSIS_SAFE
 
-    function activateProject(uint256 _projectId) public {
+    function activateProject(uint256 _projectId) public  {
         if (!IProjectList(projectList).projectExists(_projectId)) {
             revert ProjectNotInList(_projectId);
         }
@@ -251,7 +293,11 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     /* *************************************************************************************************************************************/
     /* ** Flow Syncronization Function                                                                                                   ***/
     /* *************************************************************************************************************************************/
-
+    /**
+     * @custom:problema Aca si el allowence es 0 no revierte, y eso deberia ser
+     * @custom:quien llama la funcion (chainlnk, push)
+     * @custom:revisar la gilada del stake como cambia aca las cosas
+     */
     function sync() external {
         uint256 allowance = ISuperToken(fundingToken).allowance(
             owner(),
@@ -266,7 +312,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
         }
 
         uint256 funds = ISuperToken(fundingToken).balanceOf(address(this));
-
+        round+=1;
         for (uint256 i = 0; i < activeProjectIds.length; i++) {
             uint256 projectId = activeProjectIds[i];
             if (
@@ -314,6 +360,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     /* *************************************************************************************************************************************/
     /* ** Formula Params Functions                                                                                                       ***/
     /* *************************************************************************************************************************************/
+   
 
     function setFormulaParams(FormulaParams calldata _params) public onlyOwner {
         _setFormulaParams(_params);
@@ -340,7 +387,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     /* *************************************************************************************************************************************/
 
     function getCurrentRound() public view returns (uint256) {
-        return IMimeToken(mimeToken).round();
+        return round;
     }
 
     function getProjectSupport(
