@@ -12,16 +12,18 @@ import {IProjectList, Project, ProjectNotInList} from "./interfaces/IProjectList
 import {Formula, FormulaParams} from "./Formula.sol";
 import {Manager} from "./Manager.sol";
 
-error InvalidProjectList();
-error InvalidgovToken();
-error SupportUnderflow();
-error ProjectAlreadyActive(uint256 _projectId);
-error ProjectNeedsMoreStake(
+error INVALID_PROJECT_LIST();
+// error InvalidgovToken();
+error SUPPORT_UNDERFLOW();
+error PROJECT_ALREADY_ACTIVE(uint256 _projectId);
+error PROJECT_NEEDS_MORE_STAKE(
     uint256 _projectId,
     uint256 _projectStake,
     uint256 _requiredStake
 );
-
+error NOT_ENOUGH_STAKED();
+error WRONG_AMOUNT_OF_PROJECTS(uint _sent, uint _max);
+error NOT_ENOUGH_ALLOENCE(uint _totAllowence, uint _amReq);
 /* *************************************************************************************************************************************/
 /* ** Structs                                                                                                                        ***/
 /* *************************************************************************************************************************************/
@@ -29,69 +31,50 @@ struct ProjectSupport {
     uint256 projectId;
     int256 deltaSupport;
 }
-
-// struct PoolProject {
-//     // round => project support
-//     mapping(uint256 => uint256) projectSupportAt;
-//     uint256 flowLastRate;
-//     uint256 flowLastTime;
-//     bool active;
-//     /**
-//      * We need to keep track of the beneficiary address in the pool because
-//      * can be updated in the ProjectRegistry
-//      */
-//     address beneficiary;
-//     // round => participant => support
-//     mapping(uint256 => mapping(address => uint256)) participantSupportAt;
-//     // mapping(address => uint256) participantSupportAt;
-// }
+struct SupportInfo {
+    uint200 amount;
+    uint56 time;
+}
+struct ParticipantInfo {
+    int amountStaked;
+    int freeSTake;
+    // projectId -> SupportInfo
+    mapping(uint => SupportInfo) supportAt;
+    // projectId -> support
+    // mapping(uint => bool) supportAt;
+}
 struct PoolProject {
     uint totalSupport;
     uint256 flowLastRate;
     uint256 flowLastTime;
     bool active;
     address beneficiary;
-    /**
-     * @dev Here you'll have the following:
-     * Slot [00-05] := timeSuported {uint40:max-> 1.1e12}
-     * Slot [06-07] := buffer       {uint16:max-> 6.5e5 }
-     * Slot [08-32] := ammountSupported {uint200:max-> 1.6e60}
-     * 0x0000000000027272727BBBBBB0000000aaaaaaaaaaä...qqqqq
-     */
-    mapping(address => bytes32) participantSupportAt;
+    // participant -> SupportInfo
+    mapping(address => SupportInfo) participantSupportAt;
 }
-// function name(uint40 _time,uint200 _amount)  returns () {
-//     assambly{
-//         let var;
-//         mstore(0,5,_time);
-//         mstore(8,32,_amount);
-//         sload()
-//     }   
-// }
-// Slot 0
-// uint40 tiempo;
-// uint16 buffer;
-// uint200 amount;
-// bytes32(tiempo,buffer,amount)
-
 
 contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
-    uint40 internal val;
     address public immutable cfaForwarder;
     address public immutable controller;
-
+    
+    uint40 internal val;
     uint8 public constant MAX_ACTIVE_PROJECTS = 25;
 
     address public projectList;
     address public fundingToken;
     IERC20 public govToken;
 
-    uint round;
+    // uint round;
     /**
      * @custom:change
      * Instead of using the mapping, asi rounds are not used, we store all the support inside a variable
      */
     uint totalSupport;
+
+
+    uint256[MAX_ACTIVE_PROJECTS] internal activeProjectIds;
+
+    mapping(address => ParticipantInfo) participantAmountStaked;
 
     // projectId => PoolProject [MAX_25]
     mapping(uint256 => PoolProject) public poolProjects;
@@ -108,7 +91,6 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     // mapping(uint256 => mapping(address => uint256))
     //     private totalParticipantSupportAt;
 
-    uint256[MAX_ACTIVE_PROJECTS] internal activeProjectIds;
 
     /* *************************************************************************************************************************************/
     /* ** Events                                                                                                                         ***/
@@ -117,7 +99,6 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     event ProjectActivated(uint256 indexed projectId);
     event ProjectDeactivated(uint256 indexed projectId);
     event ProjectSupportUpdated(
-        uint256 indexed round,
         uint256 indexed projectId,
         address participant,
         int256 delta
@@ -127,6 +108,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         address beneficiary,
         uint256 flowRate
     );
+
     /**
      * @custom:executes
      * This is being executed when the implementation is deployed, only once
@@ -159,7 +141,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         if (Manager(controller).isList(_projectList)) {
             projectList = _projectList;
         } else {
-            revert InvalidProjectList();
+            revert INVALID_PROJECT_LIST();
         }
         /**
          * @custom:change
@@ -168,9 +150,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
          */
         // if (Manager(controller).isToken(_govToken)) {
         govToken = IERC20(_govToken);
-        // } else {
-        //     revert InvalidgovToken();
-        // }
+
     }
 
     /* *************************************************************************************************************************************/
@@ -185,16 +165,6 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
      * Emitiendo X cantidad de shares que este asociada a la cantidad de tokens de governanza, y que haya un limite , pero que limita que haya gente que vote 2 veces?
      * Y como garantizamos el conviction voting? Salvo que sea la POOL y la multisig quien aloque los tokens de voto a los usuarios o que haya un airdrop por cada
      */
-    // mapping (address => uint) cantStaked;
-    struct ParticipantInfo {
-        uint amountStaked;
-        uint freeSTake;
-        // support[i]:=
-        // Tiempo :=uint40  (1.1e12) [05/32]
-        // Buffer :=uint16  (1.1e12) [07/32]
-        // Amount :=uint200 (1.6e60) [32/32]
-        mapping(uint => bytes32) supportAt;
-    }
 
     // [] -> Revierte
     // ['100'] -> if (l==1) array[0]
@@ -202,56 +172,10 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     function unsupportProjects(
         ProjectSupport[] calldata _projectSupports
     ) external nonReentrant {
-        uint l = _projectSupports.length;
-        if (l == 0) revert("INCORRECT_LENGTH");
-        ParticipantInfo storage participantInfo_ = participantAmountStaked[
-            msg.sender
-        ];
-
-        if (l == 1) {
-            ///@custom:funcionbytes
-            int currentSupport = int(
-                uint(participantInfo_.supportAt[_projectSupports[0].projectId])
-            );
-            ///@custom:refactor _applyDelta()
-            if (currentSupport + _projectSupports[0].deltaSupport < 0)
-                revert("NOT_ENOUGH_SUPPORT_TO_ID");
-            participantInfo_.supportAt[
-                _projectSupports[0].projectId
-            ] = _bytesEncoding(
-                uint40(block.timestamp),
-                uint(currentSupport + _projectSupports[0].deltaSupport)
-            );
-            // Modificar el support del usuario al  projectId
-            // poolProjects[_projectSupports[0].projectId]
-            // Emitir evento
-        }
-        /**
-         * 1. Quita support total
-         * 2. Se puede quitar parcialmente
-         */
-        /**
-         * Se fija varias cosas
-         * 1. Que el sender le haga support al proyecto que quiere bajarle
-         * OK - Le baje el support y reinicie el conviction
-         * NOT_OK - Continue (penalizacion??)
-         * 2. Que tenga
-         */
+        _unsupportProjects(_projectSupports);
     }
 
-    function _bytesDecoding(bytes32 _param) internal returns (uint40, uint200) {
-        return (type(uint16).max, type(uint96).max);
-    }
-
-    function _bytesEncoding(
-        uint40 _time,
-        uint _amount
-    ) internal returns (bytes32) {
-        return (keccak256(type(uint16).max, type(uint96).max));
-    }
-
-    mapping(address => ParticipantInfo) participantAmountStaked;
-
+    
     function stakeGov(uint _amount) external nonReentrant {
         _stakeGov(_amount);
     }
@@ -259,17 +183,17 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     /**
      *
      */
-
-    function unstakeGov(uint _amount) external nonReentrant {
-        uint staked = participantAmountStaked[msg.sender].amountStaked;
-        if (staked < _amount) revert NOT_ENOUGH_ALLOENCE(staked, _amount);
-        govToken.transferFrom(msg.sender, address(this), _amount);
-        ///@custom:assambly es menos costroso en terminos de gas
-        participantAmountStaked[msg.sender].amountStaked -= _amount;
+    function unstakeAndUnsupport(
+        uint _amount,
+        ProjectSupport[] calldata _projectSupports
+    ) external nonReentrant {
+        _unsupportProjects(_projectSupports);
+        _unstakeGov(_amount);
     }
 
-    error NOT_ENOUGH_ALLOENCE(uint _totAllowence, uint _amReq);
-    error NOT_ENOUGH_STAKED();
+    function unstakeGov(uint _amount) external nonReentrant {
+        _unstakeGov(_amount);
+    }
 
     /**
      * @custom:newfeature
@@ -280,7 +204,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         ProjectSupport[] calldata _projectSupports
     ) external nonReentrant {
         _stakeGov(_amountToStake);
-        // _supportProjects(_projectSupports);
+        _supportProjects(_projectSupports);
     }
 
     /**
@@ -289,123 +213,9 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
      */
     function supportProjects(
         ProjectSupport[] calldata _projectSupports
-    ) public nonReentrant {
-        /**
-         * @custom:vul
-         * Here the function must check if the length of _projectSupports does exceeds the max amount of projects supported by the pool (25)
-         */
-        /**
-         * @custom:change
-         * As in V2 we are errasing the concept of rounds, this variable is useless, it will be errased
-         */
-        // uint256 currentRound = getCurrentRound();
-        /**
-         * @custom:change
-         * In V2 instead of using mime tokens balance of participants, this is based on staked tokens
-         */
-
-        ParticipantInfo storage participantInfo_ = participantAmountStaked[
-            msg.sender
-        ];
-
-        if (participantInfo_.amountStaked == 0) revert NOT_ENOUGH_STAKED();
-        /**
-         * @custom:add
-         * Needs to keep track of the totalSupport amount 
-         */
-
-        int256 deltaSupportSum = 0;
-        for (uint256 i = 0; i < _projectSupports.length; i++) {
-            if (
-                !IProjectList(projectList).projectExists(
-                    _projectSupports[i].projectId
-                )
-            ) {
-                revert ProjectNotInList(_projectSupports[i].projectId);
-            }
-
-            deltaSupportSum += _projectSupports[i].deltaSupport;
-        }
-        /**
-         * @custom:change
-         * Needs to check if participants balance of freeStake is enough to cover deltaSupport of ALL _projectSupports
-         */
-        if (int(participantInfo_) < deltaSupportSum) revert NOT_ENOUGH_STAKED();
-        /**
-         * @custom:revision ???
-         * Needs revision
-         */
-        uint256 newTotalParticipantSupport = _applyDelta(
-            getTotalParticipantSupport(msg.sender),
-            deltaSupportSum
-        );
-        // Check that the sum of support is not greater than the participant balance
-        /**
-         * @custom:change
-         * This is checked above in the if statement
-         */
-        // require(
-        //     newTotalParticipantSupport <= participantInfo_,
-        //     "NOT_ENOUGH_BALANCE"
-        // );
-
-        /**
-         * @custom:change
-         * This information will be located inside ParticipantInfo struct inisde participantAmountStaked mapping
-         */
-        // totalParticipantSupportAt[currentRound][
-        //     msg.sender
-        // ] = newTotalParticipantSupport;
-
-        /**
-         * @custom:change
-         * @custom:refactor
-         * This information is uselles due a lack of rounds
-         * mapping(uint projectId => uint totalSupport)
-         */
-
-        // totalSupportAt[currentRound] = _applyDelta(
-        //     getTotalSupport(),
-        //     deltaSupportSum
-        // );
-
-        for (uint256 i = 0; i < _projectSupports.length; i++) {
-            uint256 projectId = _projectSupports[i].projectId;
-            int256 delta = _projectSupports[i].deltaSupport;
-            //_encodeBytes
-            //_decodeBytes
-            PoolProject storage project = poolProjects[projectId];
-
-            project.projectSupportAt[currentRound] = _applyDelta(
-                getProjectSupport(projectId),
-                delta
-            );
-            project.participantSupportAt[currentRound][
-                msg.sender
-            ] = _applyDelta(
-                getParticipantSupport(projectId, msg.sender),
-                delta
-            );
-
-            emit ProjectSupportUpdated(
-                currentRound,
-                projectId,
-                msg.sender,
-                delta
-            );
-        }
+    ) external nonReentrant {
+        _supportProjects(_projectSupports);
     }
-
-    // function claimAndSupportProjects(
-    //     uint256 index,
-    //     address account,
-    //     uint256 amount,
-    //     bytes32[] calldata merkleProof,
-    //     ProjectSupport[] calldata _projectSupports
-    // ) external {
-    //     IgovToken(govToken).claim(index, account, amount, merkleProof);
-    //     supportProjects(_projectSupports);
-    // }
 
     /* *************************************************************************************************************************************/
     /* ** Project Activation Function                                                                                                    ***/
@@ -416,7 +226,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
      * @custom:change
      * - Visibility can be changed to external rather than public
      * - Anyone can activate a project (even a non-community member)
-     * - 
+     * -
      */
 
     function activateProject(uint256 _projectId) public {
@@ -424,14 +234,14 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
             revert ProjectNotInList(_projectId);
         }
 
-        uint256 projectSupport = getProjectSupport(_projectId);
+        uint256 projectSupport = _getProjectSupport(_projectId);
 
         uint256 minSupport = type(uint256).max;
         uint256 minIndex = 0;
 
         for (uint256 i = 0; i < activeProjectIds.length; i++) {
             if (activeProjectIds[i] == _projectId) {
-                revert ProjectAlreadyActive(_projectId);
+                revert PROJECT_ALREADY_ACTIVE(_projectId);
             }
 
             // If position i is empty, use it
@@ -440,17 +250,17 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
                 return;
             }
 
-            uint256 currentProjectSupport = getProjectSupport(
+            uint256 currentProjectSupport = _getProjectSupport(
                 activeProjectIds[i]
             );
             if (currentProjectSupport < minSupport) {
-                minSupport = getProjectSupport(activeProjectIds[i]);
+                minSupport = _getProjectSupport(activeProjectIds[i]);
                 minIndex = i;
             }
         }
 
         if (projectSupport < minSupport) {
-            revert ProjectNeedsMoreStake(
+            revert PROJECT_NEEDS_MORE_STAKE(
                 _projectId,
                 projectSupport,
                 minSupport
@@ -479,9 +289,9 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
          * $EQ ->  owner()[multisig_gnosis]
          * A -> Manager[$EQc] ---> balanceOf(owner())+= $EQc
          * @custom:idea
-         * 
+         *
          * A -> Manager[$EQc] ---> balanceOf(address(this))+= $EQc
-         * 
+         *
          */
         if (allowance > 0) {
             ISuperToken(fundingToken).transferFrom(
@@ -493,13 +303,13 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         /**
          * @custom:change
          * Agregamos una variable que haga de tracker al balance que se deposita y se usa y cada vez que se `sync` que se fije si lo siquiente pasa
-         * 
+         *
          * if(syncedBalance<funds)
          * @custom:pensar
          */
 
         uint256 funds = ISuperToken(fundingToken).balanceOf(address(this));
-        round += 1;
+        // round += 1;
         for (uint256 i = 0; i < activeProjectIds.length; i++) {
             uint256 projectId = activeProjectIds[i];
             if (
@@ -579,7 +389,7 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     //     return round;
     // }
     /**
-     * @custom:refactor 
+     * @custom:refactor
      * Information is in poolProjects.totalSupport instead of poolProjects.projectSupportAt[round()]
      */
     function getProjectSupport(
@@ -588,27 +398,22 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         return _getProjectSupport(_projectId);
     }
 
-    function _getProjectSupport(
-        uint256 _projectId
-    ) internal view returns (uint256) {
-        return poolProjects[_projectId].totalSupport;
-    }
-
     /**
-     * @custom:refactor 
+     * @custom:refactor
      * Information is in participantAmountStaked[_participant].supportAt[projectId]
      */
     function getParticipantSupport(
         uint256 _projectId,
         address _participant
     ) public view returns (uint256) {
-        (, uint200 participantSupportAt_) = _bytesDecoding(
-            participantAmountStaked[_participant].supportAt[projectId]
-        );
+        uint200 participantSupportAt_ = participantAmountStaked[_participant]
+            .supportAt[_projectId]
+            .amount;
         return uint(participantSupportAt_);
     }
+
     /**
-     * @custom:refactor  
+     * @custom:refactor
      * Information is in totalSupport {uint}
      */
     function getTotalSupport() public view returns (uint256) {
@@ -622,11 +427,13 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     function getTotalParticipantSupport(
         address _participant
     ) public view returns (uint, uint) {
-        uint _amountSupported = participantAmountStaked[_participant]
-            .amountSupported;
-        uint _freeStake = participantAmountStaked[_participant].freeSTake;
+        uint _amountSupported = uint(
+            participantAmountStaked[_participant].amountStaked
+        );
+        uint _freeStake = uint(participantAmountStaked[_participant].freeSTake);
         return (_amountSupported, _freeStake);
     }
+
     /**
      * @custom:refactor ???
      * `_getCurrentRate()`
@@ -652,13 +459,223 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
     /* *************************************************************************************************************************************/
     /* ** Internal Project Activation and Deactivation Functions                                                                         ***/
     /* *************************************************************************************************************************************/
+     function _unstakeGov(uint _amount) internal {
+        int staked = participantAmountStaked[msg.sender].amountStaked;
+        if (uint(staked) < _amount)
+            revert NOT_ENOUGH_ALLOENCE(uint(staked), _amount);
+        govToken.transferFrom(msg.sender, address(this), _amount);
+        ///@custom:assambly es menos costroso en terminos de gas
+        participantAmountStaked[msg.sender].amountStaked -= int(_amount);
+    }
+    function _unsupportProjects(
+        ProjectSupport[] calldata _projectSupports
+    ) internal {
+        uint amountOfProjects_ = _revertIfInvalidProjectsLegth(
+            _projectSupports
+        );
+
+        ParticipantInfo storage participantInfo_ = participantAmountStaked[
+            msg.sender
+        ];
+
+        if (amountOfProjects_ == 1) {
+            uint projectId = _projectSupports[0].projectId;
+            int delta = _projectSupports[0].deltaSupport;
+            if (!IProjectList(projectList).projectExists(projectId)) {
+                revert ProjectNotInList(projectId);
+            }
+            ///@custom:funcionbytes
+
+            /**
+             * @custom:refactor 
+             * Overflow checked in `_applyDelta()`
+             * uint currentSupport = 
+                uint(
+                    participantInfo_
+                        .supportAt[projectId]
+                        .amount
+                );
+             * 
+             * if (currentSupport + _projectSupports[0].deltaSupport < 0)
+                revert("NOT_ENOUGH_SUPPORT_TO_ID")
+
+                
+             */
+            //
+            SupportInfo memory _newParticipantSupportId = SupportInfo(
+                uint200(_applyDelta(_getProjectSupport(projectId), delta)),
+                uint56(block.timestamp)
+            );
+            participantInfo_.supportAt[projectId] = _newParticipantSupportId;
+            participantInfo_.freeSTake += delta;
+
+            poolProjects[projectId].participantSupportAt[
+                    msg.sender
+                ] = _newParticipantSupportId;
+            poolProjects[projectId].totalSupport -= uint(delta);
+
+            emit ProjectSupportUpdated(projectId, msg.sender, delta);
+        } else {
+            for (uint i = 0; i < amountOfProjects_; i++) {
+                uint projectId = _projectSupports[i].projectId;
+                if (!IProjectList(projectList).projectExists(projectId)) {
+                    revert ProjectNotInList(projectId);
+                }
+            }
+            for (uint i = 0; i < amountOfProjects_; i++) {
+                uint projectId = _projectSupports[i].projectId;
+                int delta = _projectSupports[i].deltaSupport;
+
+                SupportInfo memory _newParticipantSupportId = SupportInfo(
+                    uint200(_applyDelta(_getProjectSupport(projectId), delta)),
+                    uint56(block.timestamp)
+                );
+
+                participantInfo_.supportAt[
+                    projectId
+                ] = _newParticipantSupportId;
+
+                poolProjects[projectId].participantSupportAt[
+                        msg.sender
+                    ] = _newParticipantSupportId;
+                poolProjects[projectId].totalSupport -= uint(delta);
+
+                emit ProjectSupportUpdated(projectId, msg.sender, delta);
+            }
+        }
+    }
+
+
+    function _supportProjects(
+        ProjectSupport[] calldata _projectSupports
+    ) internal {
+        /**
+         * @custom:vul
+         * Here the function must check if the length of _projectSupports does exceeds the max amount of projects supported by the pool (25)
+         */
+        uint amountOfProjects_ = _revertIfInvalidProjectsLegth(
+            _projectSupports
+        );
+
+        /**
+         * @custom:change
+         * As in V2 we are errasing the concept of rounds, this variable is useless, it will be errased
+         */
+        // uint256 currentRound = getCurrentRound();
+        /**
+         * @custom:change
+         * In V2 instead of using mime tokens balance of participants, this is based on staked tokens
+         */
+
+        ParticipantInfo storage participantInfo_ = participantAmountStaked[
+            msg.sender
+        ];
+
+        if (participantInfo_.amountStaked == 0) revert NOT_ENOUGH_STAKED();
+        /**
+         * @custom:add
+         * Needs to keep track of the totalSupport amount
+         */
+
+        int256 deltaSupportSum = 0;
+        if (amountOfProjects_ == 1) {
+            /**
+             * @custom:change
+             * Case of amountOfProjects_==1 added to avoid breaking the for loop
+             */
+            if (
+                !IProjectList(projectList).projectExists(
+                    _projectSupports[0].projectId
+                )
+            ) {
+                revert ProjectNotInList(_projectSupports[0].projectId);
+            }
+
+            deltaSupportSum += _projectSupports[0].deltaSupport;
+        } else {
+            for (uint256 i = 0; i < _projectSupports.length; i++) {
+                if (
+                    !IProjectList(projectList).projectExists(
+                        _projectSupports[i].projectId
+                    )
+                ) {
+                    revert ProjectNotInList(_projectSupports[i].projectId);
+                }
+
+                deltaSupportSum += _projectSupports[i].deltaSupport;
+            }
+        }
+        /**
+         * @custom:change
+         * Needs to check if participants balance of freeStake is enough to cover deltaSupport of ALL _projectSupports
+         */
+        if (participantInfo_.freeSTake < deltaSupportSum)
+            revert NOT_ENOUGH_STAKED();
+        /**
+         * @custom:revision ???
+         * Needs revision
+         *  uint256 newTotalParticipantSupport = _applyDelta(
+            participantInfo_.amountStaked,
+            deltaSupportSum
+        );
+         */
+        participantInfo_.amountStaked += deltaSupportSum;
+        participantInfo_.freeSTake -= deltaSupportSum;
+
+        // Check that the sum of support is not greater than the participant balance
+        /**
+         * @custom:change
+         * This is checked above in the if statement
+         * require(
+            newTotalParticipantSupport <= participantInfo_,
+            "NOT_ENOUGH_BALANCE"
+        );
+         */
+
+        /**
+         * @custom:change
+         * This information will be located inside ParticipantInfo struct inisde participantAmountStaked mapping
+         * totalParticipantSupportAt[currentRound][
+            msg.sender
+        ] = newTotalParticipantSupport;
+         */
+
+        /**
+         * @custom:change
+         * @custom:refactor
+         * This information is uselles due a lack of rounds
+         * mapping(uint projectId => uint totalSupport)
+         * 
+         * totalSupportAt[currentRound] = _applyDelta(
+            getTotalSupport(),
+            deltaSupportSum
+        );
+         */
+
+        for (uint256 i = 0; i < amountOfProjects_; i++) {
+            uint256 projectId = _projectSupports[i].projectId;
+            int256 delta = _projectSupports[i].deltaSupport;
+
+            PoolProject storage project = poolProjects[projectId];
+
+            SupportInfo memory _newParticipantSupportId = SupportInfo(
+                uint200(_applyDelta(_getProjectSupport(projectId), delta)),
+                uint56(block.timestamp)
+            );
+
+            project.participantSupportAt[msg.sender] = _newParticipantSupportId;
+            participantInfo_.supportAt[projectId] = _newParticipantSupportId;
+
+            emit ProjectSupportUpdated(projectId, msg.sender, delta);
+        }
+    }
 
     function _stakeGov(uint _amount) internal {
         uint allowance = govToken.allowance(msg.sender, address(this));
         if (allowance < _amount) revert NOT_ENOUGH_ALLOENCE(allowance, _amount);
         govToken.transferFrom(msg.sender, address(this), _amount);
         ///@custom:assambly es menos costroso en terminos de gas
-        participantAmountStaked[msg.sender].amountStaked += _amount;
+        participantAmountStaked[msg.sender].amountStaked += int(_amount);
     }
 
     function _activateProject(uint256 _index, uint256 _projectId) internal {
@@ -682,6 +699,12 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         );
 
         emit ProjectDeactivated(projectId);
+    }
+
+    function _getProjectSupport(
+        uint256 _projectId
+    ) internal view returns (uint256) {
+        return poolProjects[_projectId].totalSupport;
     }
 
     /* *************************************************************************************************************************************/
@@ -719,6 +742,24 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
             );
     }
 
+    function _revertIfInvalidProjectsLegth(
+        ProjectSupport[] calldata _projectSupports
+    ) internal pure returns (uint) {
+        uint amountOfProjects_ = _projectSupports.length;
+
+        if (amountOfProjects_ == 0)
+            revert WRONG_AMOUNT_OF_PROJECTS(
+                amountOfProjects_,
+                MAX_ACTIVE_PROJECTS
+            );
+        if (amountOfProjects_ > 25)
+            revert WRONG_AMOUNT_OF_PROJECTS(
+                amountOfProjects_,
+                MAX_ACTIVE_PROJECTS
+            );
+        return amountOfProjects_;
+    }
+
     /* *************************************************************************************************************************************/
     /* ** Internal Helpers Functions                                                                                                     ***/
     /* *************************************************************************************************************************************/
@@ -730,8 +771,58 @@ contract Pool is OwnableUpgradeable, ReentrancyGuardUpgradeable, Formula {
         int256 result = int256(_support) + _delta;
 
         if (result < 0) {
-            revert SupportUnderflow();
+            revert SUPPORT_UNDERFLOW();
         }
         return uint256(result);
     }
+
+    // function _bytesDecoding(bytes32 _param) internal returns (uint40, uint200) {
+    //     return (type(uint16).max, type(uint96).max);
+    // }
+
+    // function _bytesEncoding(
+    //     uint40 _time,
+    //     uint _amount
+    // ) internal returns (bytes32) {
+    //     return (keccak256(abi.encode(type(uint16).max, type(uint96).max)));
+    // }
+    // struct ParticipantInfo {
+    //     uint amountStaked;
+    //     uint freeSTake;
+    //     // support[i]:=
+    //     // Tiempo :=uint40  (1.1e12) [05/32]
+    //     // Buffer :=uint16  (1.1e12) [07/32]
+    //     // Amount :=uint200 (1.6e60) [32/32]
+    //     // mapping(uint => bytes32) supportAt;
+    //     mapping(uint => SupportInfo) supportAt;
+    // }
+    // function name(uint40 _time,uint200 _amount)  returns () {
+    //     assambly{
+    //         let var;
+    //         mstore(0,5,_time);
+    //         mstore(8,32,_amount);
+    //         sload()
+    //     }
+    // }
+    // Slot 0
+    // uint40 tiempo;
+    // uint16 buffer;
+    // uint200 amount;
+    // bytes32(tiempo,buffer,amount)
+    //     struct PoolProject {
+    //     uint totalSupport;
+    //     uint256 flowLastRate;
+    //     uint256 flowLastTime;
+    //     bool active;
+    //     address beneficiary;
+    //     /**
+    //      * @dev Here you'll have the following:
+    //      * Slot [00-05] := timeSuported {uint40:max-> 1.1e12}
+    //      * Slot [06-07] := buffer       {uint16:max-> 6.5e5 }
+    //      * Slot [08-32] := ammountSupported {uint200:max-> 1.6e60}
+    //      * 0x0000000000027272727BBBBBB0000000aaaaaaaaaaä...qqqqq
+    //      */
+    //     // mapping(address => bytes32) participantSupportAt;
+    //     mapping(address => SupportInfo) participantSupportAt;
+    // }
 }
