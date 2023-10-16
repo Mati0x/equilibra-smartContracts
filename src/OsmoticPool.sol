@@ -4,15 +4,13 @@ pragma solidity ^0.8.17;
 import {OwnableUpgradeable} from "@oz-upgradeable/access/OwnableUpgradeable.sol";
 import {Initializable} from "@oz-upgradeable/proxy/utils/Initializable.sol";
 
-//import {IMimeToken} from "mime-token/interfaces/IMimeToken.sol";
+import {IMimeToken} from "mime-token/interfaces/IMimeToken.sol";
 import {ISuperToken} from "./interfaces/ISuperToken.sol";
 
 import {ICFAv1Forwarder} from "./interfaces/ICFAv1Forwarder.sol";
-
 import {IProjectList, Project, ProjectNotInList} from "./interfaces/IProjectList.sol";
-
-import {Formula, FormulaParams} from "./Formula.sol";
-import {Manager} from "./Manager.sol";
+import {OsmoticFormula, OsmoticParams} from "./OsmoticFormula.sol";
+import {OsmoticController} from "./OsmoticController.sol";
 
 error InvalidProjectList();
 error InvalidMimeToken();
@@ -47,7 +45,7 @@ struct PoolProject {
     mapping(uint256 => mapping(address => uint256)) participantSupportAt;
 }
 
-contract Pool is Initializable, OwnableUpgradeable, Formula {
+contract OsmoticPool is Initializable, OwnableUpgradeable, OsmoticFormula {
     address public immutable cfaForwarder;
     address public immutable controller;
 
@@ -56,11 +54,10 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     address public projectList;
     address public fundingToken;
     address public mimeToken;
-    //
-    address public govToken; // GovToken
 
     // projectId => PoolProject
     mapping(uint256 => PoolProject) public poolProjects;
+
     // round => total support
     mapping(uint256 => uint256) private totalSupportAt;
     // round => participant => total support
@@ -70,7 +67,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     uint256[MAX_ACTIVE_PROJECTS] internal activeProjectIds;
 
     /* *************************************************************************************************************************************/
-    /* ** Events                                                                    ***/
+    /* ** Events                                                                                                                         ***/
     /* *************************************************************************************************************************************/
 
     event ProjectActivated(uint256 indexed projectId);
@@ -99,24 +96,25 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
     function initialize(
         address _fundingToken,
-        address _mimeToken, // => governance token
+        address _mimeToken,
         address _projectList,
-        FormulaParams calldata _params
+        OsmoticParams calldata _params
     ) public initializer {
         __Ownable_init();
-        _Formula_init(_params);
+        __OsmoticFormula_init(_params);
 
         require(
             (fundingToken = _fundingToken) != address(0),
             "Zero Funding Token"
         );
-        if (Manager(controller).isList(_projectList)) {
+
+        if (OsmoticController(controller).isList(_projectList)) {
             projectList = _projectList;
         } else {
             revert InvalidProjectList();
         }
 
-        if (Manager(controller).isToken(_mimeToken)) {
+        if (OsmoticController(controller).isToken(_mimeToken)) {
             mimeToken = _mimeToken;
         } else {
             revert InvalidMimeToken();
@@ -134,6 +132,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
         uint256 participantBalance = IMimeToken(mimeToken).balanceOf(
             msg.sender
         );
+        require(participantBalance > 0, "NO_BALANCE_AVAILABLE");
 
         int256 deltaSupportSum = 0;
         for (uint256 i = 0; i < _projectSupports.length; i++) {
@@ -147,17 +146,16 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
             deltaSupportSum += _projectSupports[i].deltaSupport;
         }
+
         uint256 newTotalParticipantSupport = _applyDelta(
             getTotalParticipantSupport(msg.sender),
             deltaSupportSum
         );
         // Check that the sum of support is not greater than the participant balance
-
         require(
             newTotalParticipantSupport <= participantBalance,
             "NOT_ENOUGH_BALANCE"
         );
-
         totalParticipantSupportAt[currentRound][
             msg.sender
         ] = newTotalParticipantSupport;
@@ -314,27 +312,29 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     }
 
     /* *************************************************************************************************************************************/
-    /* ** Formula Params Functions                                                                                                       ***/
+    /* ** Osmotic Params Functions                                                                                                       ***/
     /* *************************************************************************************************************************************/
 
-    function setFormulaParams(FormulaParams calldata _params) public onlyOwner {
-        _setFormulaParams(_params);
+    function setOsmoticFormulaParams(
+        OsmoticParams calldata _params
+    ) public onlyOwner {
+        _setOsmoticParams(_params);
     }
 
-    function setFormulaDecay(uint256 _decay) public onlyOwner {
-        _setFormulaDecay(_decay);
+    function setOsmoticFormulaDecay(uint256 _decay) public onlyOwner {
+        _setOsmoticDecay(_decay);
     }
 
-    function setFormulaDrop(uint256 _drop) public onlyOwner {
-        _setFormulaDrop(_drop);
+    function setOsmoticFormulaDrop(uint256 _drop) public onlyOwner {
+        _setOsmoticDrop(_drop);
     }
 
-    function setFormulaMaxFlow(uint256 _minStakeRatio) public onlyOwner {
-        _setFormulaMaxFlow(_minStakeRatio);
+    function setOsmoticFormulaMaxFlow(uint256 _minStakeRatio) public onlyOwner {
+        _setOsmoticMaxFlow(_minStakeRatio);
     }
 
-    function setFormulaMinStakeRatio(uint256 _minFlow) public onlyOwner {
-        _setFormulaMinStakeRatio(_minFlow);
+    function setOsmoticFormulaMinStakeRatio(uint256 _minFlow) public onlyOwner {
+        _setOsmoticMinStakeRatio(_minFlow);
     }
 
     /* *************************************************************************************************************************************/

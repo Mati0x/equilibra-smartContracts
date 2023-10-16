@@ -3,7 +3,7 @@ pragma solidity ^0.8.17;
 
 import {OwnableUpgradeable} from "@oz-upgradeable/access/OwnableUpgradeable.sol";
 import {Initializable} from "@oz-upgradeable/proxy/utils/Initializable.sol";
-import {UUPSUpgradeable, ERC1967Utils} from "@oz-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {UUPSUpgradeable} from "@oz-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 import {IProjectList, Project} from "./interfaces/IProjectList.sol";
 
@@ -64,8 +64,8 @@ contract ProjectRegistry is
         version = _version;
     }
 
-    function initialize(address _newOwner) public initializer {
-        __Ownable_init(_newOwner);
+    function initialize() public initializer {
+        __Ownable_init();
         __UUPSUpgradeable_init();
 
         nextProjectId = 1;
@@ -76,7 +76,7 @@ contract ProjectRegistry is
     /* *************************************************************************************************************************************/
 
     function implementation() external view returns (address) {
-        return ERC1967Utils.getImplementation();
+        return _getImplementation();
     }
 
     function _authorizeUpgrade(

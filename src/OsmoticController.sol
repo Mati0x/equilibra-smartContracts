@@ -2,20 +2,20 @@
 pragma solidity ^0.8.17;
 
 import {OwnableUpgradeable} from "@oz-upgradeable/access/OwnableUpgradeable.sol";
-import {PausableUpgradeable} from "@oz-upgradeable/utils/PausableUpgradeable.sol";
+import {PausableUpgradeable} from "@oz-upgradeable/security/PausableUpgradeable.sol";
 import {Initializable} from "@oz-upgradeable/proxy/utils/Initializable.sol";
 import {UUPSUpgradeable} from "@oz-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
 import {BeaconProxy} from "@oz/proxy/beacon/BeaconProxy.sol";
 import {UpgradeableBeacon} from "@oz/proxy/beacon/UpgradeableBeacon.sol";
 
-//import {MimeToken, MimeTokenFactory} from "mime-token/MimeTokenFactory.sol";
+import {MimeToken, MimeTokenFactory} from "mime-token/MimeTokenFactory.sol";
 
-import {OwnableProjectList} from "./OwnableProjectList.sol";
+import {OwnableProjectList} from "./projects/OwnableProjectList.sol";
 
-import {Pool, FormulaParams} from "./Pool.sol";
+import {OsmoticPool, OsmoticParams} from "./OsmoticPool.sol";
 
-contract Manager is
+contract OsmoticController is
     Initializable,
     OwnableUpgradeable,
     PausableUpgradeable,
@@ -37,20 +37,19 @@ contract Manager is
     /* ** Events                                                                                                                         ***/
     /* *************************************************************************************************************************************/
 
-    //event MimeTokenCreated(address indexed token);
-
-    event PoolCreated(address indexed pool);
+    event MimeTokenCreated(address indexed token);
+    event OsmoticPoolCreated(address indexed pool);
     event ProjectListCreated(address indexed list);
 
     constructor(
         uint256 _version,
-        address _pool,
+        address _osmoticPool,
         address _projectRegistry,
         address _mimeTokenFactory
     ) {
         _disableInitializers();
 
-        beacon = new UpgradeableBeacon(_pool);
+        beacon = new UpgradeableBeacon(_osmoticPool);
         // We transfer the ownership of the beacon to the deployer
         beacon.transferOwnership(msg.sender);
 
@@ -90,7 +89,7 @@ contract Manager is
         return _getImplementation();
     }
 
-    function poolImplementation() external view returns (address) {
+    function osmoticPoolImplementation() external view returns (address) {
         return beacon.implementation();
     }
 
@@ -122,38 +121,38 @@ contract Manager is
         emit ProjectListCreated(list_);
     }
 
-    function createPool(
+    function createOsmoticPool(
         bytes calldata _initPayload
     ) external whenNotPaused returns (address pool_) {
         pool_ = address(new BeaconProxy(address(beacon), _initPayload));
 
-        Pool(pool_).transferOwnership(msg.sender);
+        OsmoticPool(pool_).transferOwnership(msg.sender);
 
         isPool[pool_] = true;
 
-        emit PoolCreated(pool_);
+        emit OsmoticPoolCreated(pool_);
     }
 
-    // function createMimeToken(
-    //     bytes calldata _initPayload
-    // ) external whenNotPaused returns (address token_) {
-    //     token_ = MimeTokenFactory(mimeTokenFactory).createMimeToken(
-    //         _initPayload
-    //     );
+    function createMimeToken(
+        bytes calldata _initPayload
+    ) external whenNotPaused returns (address token_) {
+        token_ = MimeTokenFactory(mimeTokenFactory).createMimeToken(
+            _initPayload
+        );
 
-    //     require(
-    //         MimeToken(token_).timestamp() == claimTimestamp,
-    //         "OsmoticController: Invalid timestamp for token"
-    //     );
-    //     require(
-    //         MimeToken(token_).roundDuration() == claimDuration,
-    //         "OsmoticController: Invalid round duration for token"
-    //     );
+        require(
+            MimeToken(token_).timestamp() == claimTimestamp,
+            "OsmoticController: Invalid timestamp for token"
+        );
+        require(
+            MimeToken(token_).roundDuration() == claimDuration,
+            "OsmoticController: Invalid round duration for token"
+        );
 
-    //     MimeToken(token_).transferOwnership(msg.sender);
+        MimeToken(token_).transferOwnership(msg.sender);
 
-    //     isToken[token_] = true;
+        isToken[token_] = true;
 
-    //     emit MimeTokenCreated(token_);
-    // }
+        emit MimeTokenCreated(token_);
+    }
 }
