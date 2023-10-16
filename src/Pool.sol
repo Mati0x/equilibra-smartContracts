@@ -8,7 +8,9 @@ import {Initializable} from "@oz-upgradeable/proxy/utils/Initializable.sol";
 import {ISuperToken} from "./interfaces/ISuperToken.sol";
 
 import {ICFAv1Forwarder} from "./interfaces/ICFAv1Forwarder.sol";
+
 import {IProjectList, Project, ProjectNotInList} from "./interfaces/IProjectList.sol";
+
 import {Formula, FormulaParams} from "./Formula.sol";
 import {Manager} from "./Manager.sol";
 
@@ -54,10 +56,11 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     address public projectList;
     address public fundingToken;
     address public mimeToken;
+    //
+    address public govToken; // GovToken
 
     // projectId => PoolProject
     mapping(uint256 => PoolProject) public poolProjects;
-
     // round => total support
     mapping(uint256 => uint256) private totalSupportAt;
     // round => participant => total support
@@ -67,7 +70,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
     uint256[MAX_ACTIVE_PROJECTS] internal activeProjectIds;
 
     /* *************************************************************************************************************************************/
-    /* ** Events                                                                                                                         ***/
+    /* ** Events                                                                    ***/
     /* *************************************************************************************************************************************/
 
     event ProjectActivated(uint256 indexed projectId);
@@ -96,7 +99,7 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
     function initialize(
         address _fundingToken,
-        address _mimeToken,
+        address _mimeToken, // => governance token
         address _projectList,
         FormulaParams calldata _params
     ) public initializer {
@@ -107,7 +110,6 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
             (fundingToken = _fundingToken) != address(0),
             "Zero Funding Token"
         );
-
         if (Manager(controller).isList(_projectList)) {
             projectList = _projectList;
         } else {
@@ -132,7 +134,6 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
         uint256 participantBalance = IMimeToken(mimeToken).balanceOf(
             msg.sender
         );
-        require(participantBalance > 0, "NO_BALANCE_AVAILABLE");
 
         int256 deltaSupportSum = 0;
         for (uint256 i = 0; i < _projectSupports.length; i++) {
@@ -146,16 +147,17 @@ contract Pool is Initializable, OwnableUpgradeable, Formula {
 
             deltaSupportSum += _projectSupports[i].deltaSupport;
         }
-
         uint256 newTotalParticipantSupport = _applyDelta(
             getTotalParticipantSupport(msg.sender),
             deltaSupportSum
         );
         // Check that the sum of support is not greater than the participant balance
+
         require(
             newTotalParticipantSupport <= participantBalance,
             "NOT_ENOUGH_BALANCE"
         );
+
         totalParticipantSupportAt[currentRound][
             msg.sender
         ] = newTotalParticipantSupport;
