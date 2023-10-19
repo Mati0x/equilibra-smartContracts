@@ -4,6 +4,7 @@ pragma solidity ^0.8.17;
 error ProjectAlreadyInList(uint256 projectId);
 error ProjectDoesNotExist(uint256 projectId);
 error ProjectNotInList(uint256 projectId);
+error PROJECT_NOT_IN_LIST(uint256 projectId);
 
 struct Project {
     address admin;
