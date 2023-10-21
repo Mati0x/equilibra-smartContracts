@@ -13,10 +13,10 @@ Usage:
 -   **Test** : forge test 
 -   **Deploy** : 
     1. Setup `.env` variables (see `script/DeploySystem.s.sol:DeploySystem` to check wich variables are needed)
-    - > LocalHost:
+    - LocalHost:
         2. `anivil -a 22 -b 22`
         3. `make deploy-all-llhh`
-    - > Other chains:
+    -  Other chains:
         2. Setup make command
         3. `make {$YOU_COMMAND}`
 
