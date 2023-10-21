@@ -1,66 +1,23 @@
-## Foundry
+## Equilibra-SmartContracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
 
-Foundry consists of:
+**In this repo you'll find the contracts refering to V1 of Equilibra's protocol.**
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## What is Equilibra?
+Equilibra is a fund distribution protocol designed to merge 2 super powerfull techlologies:
+    1. Money Streaming
+    2. Conviction Voting
+    
+Usage:
+-   **Install**: forge install
+-   **Test** : forge test 
+-   **Deploy** : 
+    1. Setup `.env` variables (see `script/DeploySystem.s.sol:DeploySystem` to check wich variables are needed)
+    - > LocalHost:
+        2. `anivil -a 22 -b 22`
+        3. `make deploy-all-llhh`
+    - > Other chains:
+        2. Setup make command
+        3. `make {$YOU_COMMAND}`
 
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
-```
-
-### Test
-
-```shell
-$ forge test
-```
-
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+        
